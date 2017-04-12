@@ -1,0 +1,183 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <SolutionDir Condition="$(SolutionDir) == '' Or $(SolutionDir) == '*Undefined*'">$(MSBuildProjectDirectory)\..\</SolutionDir>
+    <AllowCreateNuPkgJunction>$(AllowCreateNuPkgJunction)</AllowCreateNuPkgJunction>
+    <NUPKG_JUNCITION_CONF_FILENAME>nugetlink.config</NUPKG_JUNCITION_CONF_FILENAME>
+    <NUPKG_JUNCTTION_REPOLINKPATH_KEY_NAME>repositoryLinkPath</NUPKG_JUNCTTION_REPOLINKPATH_KEY_NAME>
+    <PACKAGE_JUNCTION_DIR_NAME>packages</PACKAGE_JUNCTION_DIR_NAME>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!--<BuildDependsOn Condition=" '$(OS)' == 'Windows_NT' And '$(AllowCreateNuPkgJunction)' != '' ">-->
+    <BuildDependsOn Condition=" '$(OS)' == 'Windows_NT' ">
+      DetectJunctionExists;
+      GetConfigValueCaller;
+      RenameExistingPackagesDirectoryOrFile;
+      CreateJunction;
+      $(BuildDependsOn);
+    </BuildDependsOn>
+  </PropertyGroup>
+
+  <Target Name="DetectJunctionExists">
+    
+    <Exec Command="dir /al &quot;$(SolutionDir)&quot; | findstr /R /I &quot;&lt;JUNCTION&gt;[ ] *$(PACKAGE_JUNCTION_DIR_NAME) *\[&quot; " ConsoleToMSBuild="true" IgnoreExitCode="true">
+      <Output TaskParameter="ExitCode" PropertyName="OutputOfExec" />
+      <Output TaskParameter="ConsoleOutput" PropertyName="OutputOfStdOut" />
+    </Exec>
+    <PropertyGroup>
+      <JunctionExists>false</JunctionExists>
+      <JunctionExists Condition=" '$(OutputOfExec)' == '0'">true</JunctionExists>
+    </PropertyGroup>
+    <Message Text="JunctionExists? $(JunctionExists)" Importance="High" />
+    <Message Text="$(OutputOfExec) :  $(OutputOfStdOut)" Importance="Normal" />
+  </Target>
+
+  <Target Name="RenameExistingPackagesDirectoryOrFile" Condition=" '$(JunctionExists)' == 'false' And '$(NupkgJunctionPackagesDirExists)' == 'true' ">
+    <Exec Command="move &quot;$(NuPkgJunctionFullPathOfJunction)&quot; &quot;$(NuPkgJunctionFullPathOfJunction).removeit&quot;" ConsoleToMSBuild="true" IgnoreExitCode="false">
+      <Output TaskParameter="ExitCode" PropertyName="OutputOfExec" />
+      <Output TaskParameter="ConsoleOutput" PropertyName="OutputOfStdOut" />
+    </Exec>
+    <Message Text="$(OutputOfExec) :  $(OutputOfStdOut)" Importance="Normal" />
+  </Target>
+  
+
+  <Target Name="CreateJunction" Condition=" '$(JunctionExists)' == 'false' And '$(NupkgJunctionRepoLinkPath)' != '' And '$(NuPkgJunctionFullPathOfJunction)' != ''" >
+    <Exec Command="mklink /J &quot;$(NuPkgJunctionFullPathOfJunction)&quot; &quot;$(NupkgJunctionRepoLinkPath)&quot;" ConsoleToMSBuild="true" IgnoreExitCode="false">
+      <Output TaskParameter="ExitCode" PropertyName="OutputOfExec" />
+      <Output TaskParameter="ConsoleOutput" PropertyName="OutputOfStdOut" />
+    </Exec>
+    <Message Text="$(OutputOfExec) :  $(OutputOfStdOut)" Importance="Normal" />
+  </Target>
+
+  <Target Name="GetConfigValueCaller">
+    <GetConfigValue 
+      StartPath="$(SolutionDir)" 
+      CONF_FILENAME="$(NUPKG_JUNCITION_CONF_FILENAME)" 
+      REPOLINKPATH_KEY_NAME="$(NUPKG_JUNCTTION_REPOLINKPATH_KEY_NAME)"
+      PACKAGE_JUNCTION_DIR_NAME="$(PACKAGE_JUNCTION_DIR_NAME)">
+      
+      <Output PropertyName="NupkgJunctionRepoLinkPath" TaskParameter="ReadValue" />
+      <Output PropertyName="NuPkgJunctionFullPathOfJunction" TaskParameter="JunctionPath" />
+      <Output PropertyName="NupkgJunctionPackagesDirExists" TaskParameter="PackagesDirExists" />
+    </GetConfigValue>
+    <Message Text="The value of `NupkgJunctionRepoLinkPath` : $(NupkgJunctionRepoLinkPath)" Importance="High" />
+  </Target>
+
+  <!-- search and read nearest conf file.-->
+  <UsingTask TaskName="GetConfigValue" TaskFactory="CodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.v4.0.dll" >
+    <ParameterGroup>
+      <StartPath ParameterType="System.String" Required="true" />
+      <CONF_FILENAME ParameterType="System.String" Required="true" />
+      <REPOLINKPATH_KEY_NAME ParameterType="System.String" Required="true"/>
+      <PACKAGE_JUNCTION_DIR_NAME ParameterType="System.String" Required="true"/>
+      
+      <ReadValue ParameterType="System.String" Output="true" />
+      <JunctionPath ParameterType="System.String" Output="true" />
+      <PackagesDirExists ParameterType="System.Boolean" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Reference Include="System.Core" />
+      <Reference Include="System.Xml" />
+      <Reference Include="System.Xml.Linq" />
+      <Using Namespace="System" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Linq" />
+      <Using Namespace="System.Xml.Linq" />
+      <Code Type="Fragment" Language="cs">
+        <![CDATA[
+              JunctionPath = System.IO.Path.Combine(StartPath, PACKAGE_JUNCTION_DIR_NAME);
+              PackagesDirExists = System.IO.Directory.Exists(JunctionPath) || System.IO.File.Exists(JunctionPath);
+
+              var di = new System.IO.DirectoryInfo(StartPath);
+              ReadValue = "";
+
+              do {
+                  var files = di.GetFiles(CONF_FILENAME, System.IO.SearchOption.TopDirectoryOnly);
+                  if (files.Count() > 0) {
+                      var linkPathAttribute = XElement.Load(files[0].FullName)
+                          .Descendants( "solution" )
+                          .Descendants("add")
+                          .Where(x => x.Attributes("key").Count() > 0 && x.Attributes("value").Count() > 0)
+                          .Where(x => x.Attributes("key").Any( attr =>  attr.Value == REPOLINKPATH_KEY_NAME))
+                          .Select(x => x.Attribute("value"))
+                          .FirstOrDefault();
+
+                      if (linkPathAttribute != null) {
+                          ReadValue = linkPathAttribute.Value;
+                          break;
+                      }
+                  }
+                  di = di.Parent;
+              }
+              while (di != null);
+        ]]>
+      </Code>
+    </Task>
+  </UsingTask>
+
+
+
+
+
+
+  <!-- Task "_Hello" and Target that call the Task. -->
+  <Target Name="_HelloCaller">
+    <_Hello />
+  </Target>
+
+  <!-- _Hello task. this behave like `Action`  -->
+  <UsingTask TaskName="_Hello" TaskFactory="CodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.v4.0.dll" >
+    <ParameterGroup />
+    <Task>
+      <Code Type="Fragment" Language="cs">
+        // Log.LogMessage("Hello, world!", MessageImportance.High);  // did not work with VS2017.
+        Log.LogMessage(MessageImportance.High, "Hello, world!");
+        Log.LogError("Hello, world!");                               // write log as error, however build will success.
+      </Code>
+    </Task>
+  </UsingTask>
+
+  <!-- Task "Echo" and Target that call the Task. -->
+  <Target Name="_EchoCaller">
+    <_Echo _ParamText="This Is Parameter." />
+  </Target>
+
+  <!-- _Echo task. this behave like `Action<string>`  -->
+  <UsingTask TaskName="_Echo" TaskFactory="CodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.v4.0.dll" >
+    <ParameterGroup>
+      <_ParamText Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs">
+        // Log.LogMessage(_ParamText, MessageImportance.High);  // did not work with VS2017.
+        Log.LogMessage(MessageImportance.High, _ParamText);
+      </Code>
+    </Task>
+  </UsingTask>
+
+  <!-- Task "_Adder" and Target that call the Task. -->
+  <Target Name="_AdderCaller">
+    <Message Text="The value of `_PropertyForStoreValue` BEFORE call _Adder is $(_PropertyForStoreValue)" Importance="High" />
+    <_Adder _A="4" _B="5">
+      <Output PropertyName="_PropertyForStoreValue" TaskParameter="_C" />
+    </_Adder>
+    <Message Text="The value of `_PropertyForStoreValue` AFTER  call _Adder is $(_PropertyForStoreValue)" Importance="High" />
+  </Target>
+
+  <!-- _Adder task. this behave like `Func<int, int, int>`  -->
+  <UsingTask TaskName="_Adder" TaskFactory="CodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.v4.0.dll" >
+    <ParameterGroup>
+      <_A ParameterType="System.Int32" Required="true" />
+      <_B ParameterType="System.Int32" Required="true" />
+      <_C ParameterType="System.Int32" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs">
+        _C = _A + _B;
+      </Code>
+    </Task>
+  </UsingTask>
+
+
+</Project>
